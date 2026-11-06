@@ -1,0 +1,137 @@
+# Meridian — evaluation stack (pull-and-run).
+#
+# Meridian is delivered on the Procela governance platform: this stack pulls the
+# PRE-BUILT platform images from GitHub Container Registry and applies the
+# Meridian brand (name, logo, colours) at first boot via seed.mjs. No source
+# checkout, no local build. Because it runs the upstream platform images, every
+# platform release reaches Meridian with a plain `docker compose pull` — nothing
+# to re-fork or rebuild.
+#
+# Quick start (see README.md for detail):
+#   cp .env.example .env            # then set JWT_SECRET
+#   docker compose -f docker-compose.eval.yml up
+#   open http://localhost:3000
+#
+# Pin a platform build via two .env vars:
+#   MERIDIAN_REGISTRY   default ghcr.io/datalign-technology
+#   MERIDIAN_TAG        default latest   (e.g. 0.1.31 to pin)
+#
+# This is an EVALUATION build: dev auth (any email signs in), demo data seeded
+# on first boot, mail captured locally, AI off unless you add a key. Not a
+# production deployment.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: meridian
+      POSTGRES_DB: meridian
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meridian"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Local SMTP catcher — password-reset and "Report a problem" email land in a
+  # web inbox at http://localhost:8025. Nothing leaves your machine.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # web inbox
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+
+  # Applies the Prisma schema to Postgres before the backend starts. Reuses the
+  # backend image (which bundles prisma/ + the migration engine) and exits.
+  migrate:
+    image: ${MERIDIAN_REGISTRY:-ghcr.io/datalign-technology}/procela-backend:${MERIDIAN_TAG:-latest}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://meridian:meridian@postgres:5432/meridian
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    image: ${MERIDIAN_REGISTRY:-ghcr.io/datalign-technology}/procela-backend:${MERIDIAN_TAG:-latest}
+    env_file:
+      - .env
+    environment:
+      # Infra wiring — overrides anything in .env so the eval stack is
+      # self-contained regardless of what the evaluator put there.
+      NODE_ENV: production
+      # Evaluation build: the images ship NODE_ENV=production (for the Node
+      # runtime) but this trial intentionally uses passwordless `dev` auth.
+      # EVAL_MODE is the explicit opt-in that lets that combination boot past
+      # the production auth-safety guard; it only ever excuses an explicitly-set
+      # AUTH_PROVIDER=dev. Pinned here (not in .env) so the stack always starts.
+      EVAL_MODE: "true"
+      AUTH_PROVIDER: dev
+      PORT: "3001"
+      DATABASE_URL: postgresql://meridian:meridian@postgres:5432/meridian
+      REDIS_URL: redis://redis:6379
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_USER: eval
+      SMTP_PASS: eval
+      SMTP_SECURE: "false"
+      MAIL_FROM: "Meridian (eval) <noreply@meridian.local>"
+      APP_URL: http://localhost:3000
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+  # Web UI (nginx). Serves the static build and reverse-proxies /api to the
+  # backend container — so the browser only ever talks to localhost:3000 and
+  # the image needs no build-time API URL. (The service MUST be named
+  # `backend` — the image's nginx.conf proxies /api → http://backend:3001.)
+  frontend:
+    image: ${MERIDIAN_REGISTRY:-ghcr.io/datalign-technology}/procela-frontend:${MERIDIAN_TAG:-latest}
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  # One-shot: applies the Meridian brand (name, logo, colours) and, on FIRST
+  # boot, loads a demo tenant so the app isn't empty. Branding is re-applied
+  # every run (idempotent); the demo seed skips itself if an organization
+  # already exists, so restarting never wipes data you added. Pick the demo
+  # industry with DEMO_INDUSTRY (default shipbuilding). Re-run on demand:
+  #   docker compose run --rm eval-seed
+  eval-seed:
+    image: node:20-slim
+    working_dir: /seed
+    volumes:
+      - ./seed.mjs:/seed/seed.mjs:ro
+    environment:
+      MERIDIAN_URL: http://backend:3001/api/v1
+      DEMO_INDUSTRY: ${DEMO_INDUSTRY:-shipbuilding}
+    depends_on:
+      backend:
+        condition: service_started
+    command: ["node", "seed.mjs"]
+    restart: "no"
+
+volumes:
+  postgres_data:
