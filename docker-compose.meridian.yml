@@ -1,0 +1,44 @@
+# Meridian brand overlay for the Procela evaluation stack.
+#
+# This is an ADDITIVE override applied ON TOP OF the upstream Procela bundle
+# (docker-compose.eval.yml + seed.mjs), which is synced UNMODIFIED from the
+# platform on every release. Always launch both files together:
+#
+#   docker compose -f docker-compose.eval.yml -f docker-compose.meridian.yml up
+#
+# It makes three small, brand-only changes and touches nothing structural:
+#   1. re-brands the eval mail-from,
+#   2. defaults the demo tenant to the shipbuilding fixture (a naval/maritime
+#      evaluation) when DEMO_INDUSTRY isn't set in .env,
+#   3. adds a one-shot that applies the Meridian brand (name, logo, navy/gold
+#      palette) via the platform's branding API — see brand.mjs.
+#
+# Because the brand lives here (and in brand.mjs) and not in the base files, the
+# platform's compose + seed can update without ever colliding with Meridian.
+
+services:
+  backend:
+    environment:
+      MAIL_FROM: "Meridian (eval) <noreply@meridian.local>"
+
+  # Keep the upstream demo seeder, but default it to shipbuilding for Meridian.
+  # (An explicit DEMO_INDUSTRY in .env still wins.)
+  eval-seed:
+    environment:
+      DEMO_INDUSTRY: ${DEMO_INDUSTRY:-shipbuilding}
+
+  # One-shot: applies the Meridian brand once the backend is up. Idempotent —
+  # re-runs every boot and themes the login screen too. Re-run on demand:
+  #   docker compose -f docker-compose.eval.yml -f docker-compose.meridian.yml run --rm meridian-brand
+  meridian-brand:
+    image: node:20-slim
+    working_dir: /brand
+    volumes:
+      - ./brand.mjs:/brand/brand.mjs:ro
+    environment:
+      API_URL: http://backend:3001/api/v1
+    depends_on:
+      backend:
+        condition: service_started
+    command: ["node", "brand.mjs"]
+    restart: "no"

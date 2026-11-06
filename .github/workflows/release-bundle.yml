@@ -11,9 +11,11 @@ name: Release bundle
 #       git tag v1.0.0 && git push origin v1.0.0
 #   - workflow_dispatch packages a one-off zip as a build artifact (no Release).
 #
-# The bundled .env.example keeps MERIDIAN_TAG=latest so a downloaded bundle
+# The bundled .env.example keeps PROCELA_TAG=latest so a downloaded bundle
 # still auto-tracks the newest platform build; pin it in your own .env for a
-# reproducible eval.
+# reproducible eval. Launch is two compose files: the platform base
+# (docker-compose.eval.yml) plus the Meridian brand overlay
+# (docker-compose.meridian.yml).
 
 on:
   push:
@@ -43,8 +45,10 @@ jobs:
           NAME="meridian-eval-${VERSION}"
           mkdir -p "dist/${NAME}"
           cp docker-compose.eval.yml \
+             docker-compose.meridian.yml \
              .env.example \
              seed.mjs \
+             brand.mjs \
              meridian-icon.svg \
              README.md \
              EULA.txt \
@@ -78,7 +82,7 @@ jobs:
             echo "1. Download \`meridian-eval-${VERSION}.zip\` below and unzip it."
             echo "2. \`cd meridian-eval-${VERSION}\`"
             echo "3. \`cp .env.example .env\` and set \`JWT_SECRET\` to any long random string."
-            echo "4. \`docker compose -f docker-compose.eval.yml up\`"
+            echo "4. \`docker compose -f docker-compose.eval.yml -f docker-compose.meridian.yml up\`"
             echo "5. Open http://localhost:3000 and sign in as a demo account (dev auth). Mail inbox: http://localhost:8025."
             echo
             echo "Runs the upstream platform images and applies the Meridian brand at boot, so it tracks the newest platform build with a plain \`docker compose pull\`. Evaluation use only — see \`EULA.txt\` in the zip."
