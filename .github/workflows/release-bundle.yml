@@ -1,0 +1,97 @@
+name: Release bundle
+
+# Packages the Meridian evaluation bundle into a single zip and attaches it to
+# a GitHub Release, so an evaluator can download one file, unzip, and
+# `docker compose up` — no git clone needed. The stack still pulls the upstream
+# procela-* platform images (this repo builds no images of its own), so the zip
+# is just the compose + seed + docs.
+#
+# Trigger — release-driven:
+#   - Push a `v*` tag (e.g. `v1.0.0`) to cut a release:
+#       git tag v1.0.0 && git push origin v1.0.0
+#   - workflow_dispatch packages a one-off zip as a build artifact (no Release).
+#
+# The bundled .env.example keeps MERIDIAN_TAG=latest so a downloaded bundle
+# still auto-tracks the newest platform build; pin it in your own .env for a
+# reproducible eval.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Package & attach the Meridian eval bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          # Tag build → version from the tag (strip leading v); manual run → a dev stamp.
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          NAME="meridian-eval-${VERSION}"
+          mkdir -p "dist/${NAME}"
+          cp docker-compose.eval.yml \
+             .env.example \
+             seed.mjs \
+             meridian-icon.svg \
+             README.md \
+             EULA.txt \
+             THIRD-PARTY-NOTICES.txt \
+             "dist/${NAME}/"
+          (cd dist && zip -r "${NAME}.zip" "${NAME}")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "zip=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      # Manual runs: expose the zip as a workflow artifact (no Release to attach to).
+      - name: Upload bundle artifact (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: ${{ steps.bundle.outputs.zip }}
+
+      - name: Create / update the Release and attach the bundle
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bundle.outputs.version }}
+          ZIP: ${{ steps.bundle.outputs.zip }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Meridian evaluation build **${VERSION}** — run the whole platform locally. Download the zip below, unzip, and \`docker compose up\`. No source checkout, no build step."
+            echo
+            echo "**Quick start**"
+            echo "1. Download \`meridian-eval-${VERSION}.zip\` below and unzip it."
+            echo "2. \`cd meridian-eval-${VERSION}\`"
+            echo "3. \`cp .env.example .env\` and set \`JWT_SECRET\` to any long random string."
+            echo "4. \`docker compose -f docker-compose.eval.yml up\`"
+            echo "5. Open http://localhost:3000 and sign in as a demo account (dev auth). Mail inbox: http://localhost:8025."
+            echo
+            echo "Runs the upstream platform images and applies the Meridian brand at boot, so it tracks the newest platform build with a plain \`docker compose pull\`. Evaluation use only — see \`EULA.txt\` in the zip."
+          } > release-notes.md
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${ZIP}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${ZIP}" \
+              --title "Meridian evaluation build ${VERSION}" \
+              --notes-file release-notes.md
+          fi
+
+      - name: Summary
+        run: |
+          echo "### Meridian eval bundle" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${{ steps.bundle.outputs.name }}.zip\` assembled." >> "$GITHUB_STEP_SUMMARY"
