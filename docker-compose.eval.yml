@@ -77,6 +77,11 @@ services:
       # the production auth-safety guard; it only ever excuses an explicitly-set
       # AUTH_PROVIDER=dev. Pinned here (not in .env) so the stack always starts.
       EVAL_MODE: "true"
+      # Optional soft trial expiry: set a date to show a countdown banner that
+      # turns into an "evaluation ended — contact sales" notice once it passes.
+      # A nudge, not a lock. Unset ⇒ the eval build stays un-timed.
+      EVAL_EXPIRES_AT: "${EVAL_EXPIRES_AT:-}"
+      EVAL_CONTACT_URL: "${EVAL_CONTACT_URL:-}"
       AUTH_PROVIDER: dev
       PORT: "3001"
       DATABASE_URL: postgresql://procela:procela@postgres:5432/procela
